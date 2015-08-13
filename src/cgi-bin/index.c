@@ -5,6 +5,7 @@
 
 /* Global constants */
 
+#define MAX             32
 #define MAIN            "."
 #define CSSPATH         "../css/style.css"
 #define COOKIE          "HTTP_COOKIE"
@@ -297,10 +298,10 @@ char* password_of(char* user)
 {
     int len;
     int id;
-    char name[32];
-    char username[32];
-    char password[32];
-    char line[128];
+    char name[MAX];
+    char username[MAX];
+    char password[MAX];
+    char line[4 * MAX];
     char* res;
     char* db_filename;
     FILE *file;
@@ -316,7 +317,7 @@ char* password_of(char* user)
     while (fgets(line, sizeof(line), file) != NULL)
     {
         sscanf(line, "%d\t%s\t%s\t%s\n", &id, name, username, password);
-        if (!strncmp(username, user, 32))
+        if (!strncmp(username, user, MAX))
         {
             len = strlen(password);
             res = malloc(len);
@@ -334,10 +335,10 @@ char* name_of(char* user)
 {
     int len;
     int id;
-    char name[32];
-    char username[32];
-    char password[32];
-    char line[128];
+    char name[MAX];
+    char username[MAX];
+    char password[MAX];
+    char line[4 * MAX];
     char* res;
     char* db_filename;
     FILE *file;
@@ -352,7 +353,7 @@ char* name_of(char* user)
     while (fgets(line, sizeof(line), file) != NULL)
     {
         sscanf(line, "%d\t%s\t%s\t%s\n", &id, name, username, password);
-        if (!strncmp(username, user, 32))
+        if (!strncmp(username, user, MAX))
         {
             len = strlen(name);
             res = malloc(len);
@@ -368,21 +369,35 @@ char* name_of(char* user)
 
 /* POST data operations */
 
+int req_login(char* data)
+{
+    int c;
+    char cl[MAX];
+
+    c = sscanf(data, "%*[^=]%*[^&]%*[^=]%*[^&]&%s", cl);
+
+    return c == 1 && !strncmp(cl, "commit=Login", MAX);
+}
+int req_logout(char* data)
+{
+    return !strncmp(data, "commit=Logout", MAX);
+}
+
 int read_login_data(char* data, char** username, char** password)
 {
     int c;
-    char u[32];
-    char p[32];
-    char cl[32];
+    char u[MAX];
+    char p[MAX];
+    char cl[MAX];
 
-    *username = malloc(32);
-    *password = malloc(32);
+    *username = malloc(MAX);
+    *password = malloc(MAX);
     c = sscanf(data, "%[^=]=%[^&]&%[^=]=%[^&]&%s", u, *username, p, *password, cl);
 
     return c == 5 &&
-        !strncmp(u, "username", 32) &&
-        !strncmp(p, "password", 32) &&
-        !strncmp(cl, "commit=Login", 32);
+        !strncmp(u, "username", MAX) &&
+        !strncmp(p, "password", MAX) &&
+        !strncmp(cl, "commit=Login", MAX);
 }
 
 /* States logic */
@@ -391,62 +406,109 @@ int main()
 {
     char* cookie;
     char* clenstr;
-    char* data;
+    char* post_data;
     char* username;
     char* password;
     int clen;
 
-    cookie = getenv(COOKIE);
+    cookie = getenv(COOKIE); // cookie contains only username.
+
+    /* A cookie was sent */
     if (cookie != NULL && strlen(cookie) > 0)
     {
         clenstr = getenv(CLEN);
+
+        /* POST data was sent */
         if (clenstr != NULL && sscanf(clenstr, "%d", &clen) == 1)
         {
-            /* Logout POST */
-            data = malloc(++clen);
-            fgets(data, clen, stdin);
+            /* Read POST data */
+            post_data = malloc(++clen);
+            fgets(post_data, clen, stdin);
 
-            /* Invalidate cookie */
-            SETCOOKIE(cookie, 0); // Actually username not needed...
+            /* Logout requested */
+            if (req_logout(post_data))
+            {
+                /* Invalidate cookie for this user */
+                SETCOOKIE(cookie, 0); // Actually, username is not needed.
 
-            /* Reload page */
-            LOCATION(MAIN);
+                /* Reload page */
+                LOCATION(MAIN);
+            }
+
+            /* Other requests... */
+
+            /* Invalid POST data */
+            else // Should never reach here under normal behaviour.
+            {
+                /* Reload page */
+                LOCATION(MAIN);
+            }
         }
-        else if (!strncmp(cookie, INVALID_LOGIN, 32))
+
+        /* There was an invalid login attempt, show a message */
+        else if (!strncmp(cookie, INVALID_LOGIN, MAX))
         {
-                SETCOOKIE(INVALID_LOGIN, 0);
-                CTYPE(HTML);
-                HTML5();
-                LOGIN("Wrong username or password.");
+            SETCOOKIE(INVALID_LOGIN, 0); // Used to show failure message once.
+            CTYPE(HTML);
+            HTML5();
+            LOGIN("Wrong username or password.");
         }
+
+        /* Display welcome page */
         else
         {
-            /* Welcome page */
             CTYPE(HTML);
             HTML5();
             WELCOME(name_of(cookie));
         }
     }
+
+    /* No cookie received */
     else
     {
         clenstr = getenv(CLEN);
+
+        /* POST data was sent */
         if (clenstr != NULL && sscanf(clenstr, "%d", &clen) == 1)
         {
-            /* Login POST */
-            data = malloc(++clen);
-            fgets(data, clen, stdin);
+            /* Read POST data */
+            post_data = malloc(++clen);
+            fgets(post_data, clen, stdin);
 
-            /* Issue cookie after validating username and password */
-            SETCOOKIE(read_login_data(data, &username, &password) &&
-                !strncmp(password_of(username), password, 32) ?
-                username : INVALID_LOGIN, 1);
+            /* Login requested */
+            if (req_login(post_data))
+            {
+                /* Valid login attempt */
+                if (read_login_data(post_data, &username, &password) &&
+                    !strncmp(password_of(username), password, MAX))
+                {
+                    SETCOOKIE(username, 1);
+                }
 
-            /* Reload page */
-            LOCATION(MAIN);
+                /* Issue an invalid login attempt */
+                else
+                {
+                    /* Send an invalidation cookie for displaying a message */
+                    SETCOOKIE(INVALID_LOGIN, 1);
+                }
+
+                /* Reload page */
+                LOCATION(MAIN);
+            }
+
+            /* Other requests... */
+
+            /* Invalid POST data */
+            else // Should never reach here under normal behaviour.
+            {
+                /* Reload page */
+                LOCATION(MAIN);
+            }
         }
+
+        /* Display login page */
         else
         {
-            /* Login form */
             CTYPE(HTML);
             HTML5();
             LOGIN(NULL);
